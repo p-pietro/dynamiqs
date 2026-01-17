@@ -68,12 +68,13 @@ def floquet(
             [`Kvaerno5`][dynamiqs.method.Kvaerno5],
             [`Euler`][dynamiqs.method.Euler]).
         gradient: Algorithm used to compute the gradient.
-        options: Generic options (supported: `progress_meter`, `t0`).
+        options: Generic options (supported: `progress_meter`, `t0`, `parallel`).
             ??? "Detailed options API"
                 ```
                 dq.Options(
                     progress_meter: AbstractProgressMeter | bool | None = None,
                     t0: ScalarLike | None = None,
+                    parallel: DataParallel | None = None,
                 )
                 ```
 
@@ -90,6 +91,10 @@ def floquet(
                     the forward pass.
                 - **`t0`** - Initial time. If `None`, defaults to the first time in
                     `tsave`.
+                - **`parallel`** - Data-parallel sharding policy. If provided, batched
+                    timeqarrays are sharded along the selected batch axis while
+                    metadata (like `tsave`) is replicated. The size of the sharded
+                    batch axis should be divisible by the number of devices.
 
     Returns:
         `dq.FloquetResult` object holding the result of the Floquet computation. Use
@@ -189,6 +194,12 @@ def floquet(
     H, T, tsave = _check_floquet_args(H, T, tsave)
     check_options(options, 'floquet')
     options = options.initialise()
+    parallel = options.parallel
+
+    if parallel is not None:
+        parallel.log_under_parallelization(H.ndim - 2, context='dq.floquet')
+        H = parallel.put_timeqarray(H)
+        tsave = parallel.put_array(tsave)
 
     # We implement the jitted vectorization in another function to pre-convert QuTiP
     # objects (which are not JIT-compatible) to qarrays

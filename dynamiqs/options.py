@@ -7,6 +7,7 @@ import jax.tree_util as jtu
 from jaxtyping import PyTree, ScalarLike
 
 from ._utils import tree_str_inline
+from .distributed import DataParallel
 from .progress_meter import AbstractProgressMeter
 from .qarrays.qarray import QArray
 from .utils.global_settings import get_progress_meter
@@ -24,6 +25,7 @@ class Options(eqx.Module):
     nmaxclick: int = 10_000
     vectorized: bool = False
     assume_hermitian: bool = True
+    parallel: DataParallel | None = eqx.field(static=True, default=None)
 
     def __init__(
         self,
@@ -36,6 +38,7 @@ class Options(eqx.Module):
         nmaxclick: int = 10_000,
         vectorized: bool = False,
         assume_hermitian: bool = True,
+        parallel: DataParallel | None = None,
     ):
         self.save_states = save_states
         self.save_propagators = save_propagators
@@ -45,6 +48,7 @@ class Options(eqx.Module):
         self.nmaxclick = nmaxclick
         self.vectorized = vectorized
         self.assume_hermitian = assume_hermitian
+        self.parallel = parallel
 
         # make `save_extra` a valid Pytree with `Partial`
         self.save_extra = jtu.Partial(save_extra) if save_extra is not None else None
@@ -74,6 +78,7 @@ class Options(eqx.Module):
             nmaxclick=self.nmaxclick,
             vectorized=self.vectorized,
             assume_hermitian=self.assume_hermitian,
+            parallel=self.parallel,
         )
 
 
@@ -85,6 +90,7 @@ def check_options(options: Options, solver_name: str):
             'progress_meter',
             't0',
             'save_extra',
+            'parallel',
         ),
         'mesolve': (
             'save_states',
@@ -94,20 +100,40 @@ def check_options(options: Options, solver_name: str):
             'save_extra',
             'vectorized',
             'assume_hermitian',
+            'parallel',
         ),
-        'sepropagator': ('save_propagators', 'progress_meter', 't0', 'save_extra'),
-        'mepropagator': ('save_propagators', 'cartesian_batching', 't0', 'save_extra'),
-        'floquet': ('progress_meter', 't0'),
+        'sepropagator': (
+            'save_propagators',
+            'progress_meter',
+            't0',
+            'save_extra',
+            'parallel',
+        ),
+        'mepropagator': (
+            'save_propagators',
+            'cartesian_batching',
+            't0',
+            'save_extra',
+            'parallel',
+        ),
+        'floquet': ('progress_meter', 't0', 'parallel'),
         'jssesolve': (
             'save_states',
             'cartesian_batching',
             't0',
             'save_extra',
             'nmaxclick',
+            'parallel',
         ),
-        'dssesolve': ('save_states', 'cartesian_batching', 'save_extra'),
-        'jsmesolve': ('save_states', 'cartesian_batching', 'save_extra', 'nmaxclick'),
-        'dsmesolve': ('save_states', 'cartesian_batching', 'save_extra'),
+        'dssesolve': ('save_states', 'cartesian_batching', 'save_extra', 'parallel'),
+        'jsmesolve': (
+            'save_states',
+            'cartesian_batching',
+            'save_extra',
+            'nmaxclick',
+            'parallel',
+        ),
+        'dsmesolve': ('save_states', 'cartesian_batching', 'save_extra', 'parallel'),
     }
     valid_options = supported_options[solver_name]
 

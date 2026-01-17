@@ -202,6 +202,17 @@ The **Dynamiqs** Python API features two main types of functions: solvers of dif
         - to_qutip
         - sparsedia_from_dict
 
+
+### Distributed (dq.distributed)
+
+::: dynamiqs.distributed
+    options:
+        extra:
+            table: true
+        members:
+        - make_mesh
+        - DataParallel
+
 ### Global settings
 
 ::: dynamiqs.utils.global_settings

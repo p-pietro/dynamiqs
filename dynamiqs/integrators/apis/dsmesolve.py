@@ -20,6 +20,7 @@ from .._utils import (
     astimeqarray,
     cartesian_vmap,
     catch_xla_runtime_error,
+    check_parallel_flat_batching,
     multi_vmap,
 )
 from ..core.fixed_step_stochastic_integrator import (
@@ -133,13 +134,14 @@ def dsmesolve(
             method-dependent, refer to the documentation of the chosen method for more
             details.
         options: Generic options (supported: `save_states`, `cartesian_batching`,
-            `save_extra`).
+            `save_extra`, `parallel`).
             ??? "Detailed options API"
                 ```
                 dq.Options(
                     save_states: bool = True,
                     cartesian_batching: bool = True,
                     save_extra: Callable[[Array], PyTree] | None = None,
+                    parallel: DataParallel | None = None,
                 )
                 ```
 
@@ -154,6 +156,10 @@ def dsmesolve(
                     `f(QArray) -> PyTree` that takes a state as input and returns a
                     PyTree. This can be used to save additional arbitrary data
                     during the integration, accessible in `result.extra`.
+                - **`parallel`** - Data-parallel sharding policy. If provided, batched
+                    qarrays and timeqarrays are sharded along the selected batch axis
+                    while metadata (like `tsave`) is replicated. The size of the
+                    sharded batch axis should be divisible by the number of devices.
 
     Returns:
         `dq.DSMESolveResult` object holding the result of the diffusive SME integration.
@@ -288,6 +294,7 @@ def dsmesolve(
     tsave = check_times(tsave, 'tsave')
     check_options(options, 'dsmesolve')
     options = options.initialise()
+    parallel = options.parallel
 
     # todo: fix static tsave
     # this condition allows the user to pass a tuple for tsave to bypass this bit of
@@ -309,6 +316,32 @@ def dsmesolve(
     Lcs = [L for L, eta in zip(Ls, etas, strict=True) if eta == 0]
     Lms = [L for L, eta in zip(Ls, etas, strict=True) if eta != 0]
     etas = etas[etas != 0]
+
+    if parallel is not None:
+        if options.cartesian_batching:
+            total_batched_axes = (
+                H.ndim - 2 + sum(L.ndim - 2 for L in [*Lcs, *Lms]) + (rho0.ndim - 2)
+            )
+            parallel.log_under_parallelization(
+                total_batched_axes, context='dq.dsmesolve'
+            )
+        else:
+            shapes = [
+                H.shape[:-2],
+                *[L.shape[:-2] for L in [*Lcs, *Lms]],
+                rho0.shape[:-2],
+            ]
+            check_parallel_flat_batching(
+                shapes=shapes, parallel=parallel, context='dq.dsmesolve'
+            )
+        H = parallel.put_timeqarray(H)
+        Lcs = [parallel.put_timeqarray(L) for L in Lcs]
+        Lms = [parallel.put_timeqarray(L) for L in Lms]
+        rho0 = parallel.put_qarray(rho0)
+        if exp_ops is not None:
+            exp_ops = [parallel.put_qarray(E) for E in exp_ops]
+        if not isinstance(tsave, tuple):
+            tsave = parallel.put_array(tsave)
 
     # we implement the jitted vectorization in another function to pre-convert QuTiP
     # objects (which are not JIT-compatible) to JAX arrays

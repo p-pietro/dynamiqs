@@ -193,7 +193,7 @@ class SparseDIAQArray(QArray):
         return self.asdense()._eigvalsh()
 
     def devices(self) -> set[jax.Device]:
-        raise NotImplementedError
+        return self.diags.devices()
 
     def isherm(self, rtol: float = 1e-5, atol: float = 1e-8) -> bool:
         # TODO: Improve this by using a direct QArray comparison function, once it is

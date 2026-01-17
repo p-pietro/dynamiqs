@@ -76,7 +76,7 @@ def sepropagator(
             method-dependent, refer to the documentation of the chosen method for more
             details.
         options: Generic options (supported: `save_propagators`, `progress_meter`, `t0`,
-            `save_extra`).
+            `save_extra`, `parallel`).
             ??? "Detailed options API"
                 ```
                 dq.Options(
@@ -84,6 +84,7 @@ def sepropagator(
                     progress_meter: AbstractProgressMeter | bool | None = None,
                     t0: ScalarLike | None = None,
                     save_extra: Callable[[Array], PyTree] | None = None,
+                    parallel: DataParallel | None = None,
                 )
                 ```
 
@@ -106,6 +107,10 @@ def sepropagator(
                     `f(QArray) -> PyTree` that takes a propagator as input and returns
                     a PyTree. This can be used to save additional arbitrary data
                     during the integration, accessible in `result.extra`.
+                - **`parallel`** - Data-parallel sharding policy. If provided, batched
+                    timeqarrays are sharded along the selected batch axis while
+                    metadata (like `tsave`) is replicated. The size of the sharded
+                    batch axis should be divisible by the number of devices.
 
 
     Returns:
@@ -187,6 +192,12 @@ def sepropagator(
     tsave = check_times(tsave, 'tsave')
     check_options(options, 'sepropagator')
     options = options.initialise()
+    parallel = options.parallel
+
+    if parallel is not None:
+        parallel.log_under_parallelization(H.ndim - 2, context='dq.sepropagator')
+        H = parallel.put_timeqarray(H)
+        tsave = parallel.put_array(tsave)
 
     # we implement the jitted vectorization in another function to pre-convert QuTiP
     # objects (which are not JIT-compatible) to qarrays

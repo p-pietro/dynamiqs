@@ -20,6 +20,7 @@ from .._utils import (
     astimeqarray,
     cartesian_vmap,
     catch_xla_runtime_error,
+    check_parallel_flat_batching,
     multi_vmap,
 )
 from ..core.diffrax_integrator import (
@@ -78,7 +79,7 @@ def sesolve(
             method-dependent, refer to the documentation of the chosen method for more
             details.
         options: Generic options (supported: `save_states`, `cartesian_batching`,
-            `progress_meter`, `t0`, `save_extra`).
+            `progress_meter`, `t0`, `save_extra`, `parallel`).
             ??? "Detailed options API"
                 ```
                 dq.Options(
@@ -87,6 +88,7 @@ def sesolve(
                     progress_meter: AbstractProgressMeter | bool | None = None,
                     t0: ScalarLike | None = None,
                     save_extra: Callable[[Array], PyTree] | None = None,
+                    parallel: DataParallel | None = None,
                 )
                 ```
 
@@ -112,6 +114,11 @@ def sesolve(
                     `f(QArray) -> PyTree` that takes a state as input and returns a
                     PyTree. This can be used to save additional arbitrary data
                     during the integration, accessible in `result.extra`.
+                - **`parallel`** - Data-parallel sharding policy. If provided, batched
+                    qarrays and timeqarrays are sharded along the selected batch axis
+                    while non-batched operators and metadata (like `tsave`) are
+                    replicated. The size of the sharded batch axis should be
+                    divisible by the number of devices.
 
     Returns:
         `dq.SESolveResult` object holding the result of the Schrödinger equation
@@ -223,6 +230,23 @@ def sesolve(
     tsave = check_times(tsave, 'tsave')
     check_options(options, 'sesolve')
     options = options.initialise()
+    parallel = options.parallel
+
+    if parallel is not None:
+        if options.cartesian_batching:
+            total_batched_axes = (H.ndim - 2) + (psi0.ndim - 2)
+            parallel.log_under_parallelization(total_batched_axes, context='dq.sesolve')
+        else:
+            check_parallel_flat_batching(
+                shapes=[H.shape[:-2], psi0.shape[:-2]],
+                parallel=parallel,
+                context='dq.sesolve',
+            )
+        H = parallel.put_timeqarray(H)
+        psi0 = parallel.put_qarray(psi0)
+        if exp_ops is not None:
+            exp_ops = [parallel.put_qarray(E) for E in exp_ops]
+        tsave = parallel.put_array(tsave)
 
     # we implement the jitted vectorization in another function to pre-convert QuTiP
     # objects (which are not JIT-compatible) to qarrays

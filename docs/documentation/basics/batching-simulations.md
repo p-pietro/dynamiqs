@@ -115,6 +115,46 @@ The simulation runs for each set of Hamiltonians, jump operators and initial sta
     For example for `dq.sesolve()` with `H` of shape _(2, 3, n, n)_, `psi0` can be of shape: _(n, 1)_, _(3, n, 1)_, _(2, 1, n, 1)_, _(2, 3, n, 1)_, _(..., 2, 3, n, 1)_, etc. By playing with the arguments shape, you have complete freedom over the simulation you want to run.
 
 
+## Parallelizing batched simulations
+
+Dynamiqs can automatically shard batched simulations across multiple devices using
+JAX named sharding. This is configured via the `parallel` option:
+
+```python
+import dynamiqs as dq
+from dynamiqs.distributed import DataParallel, make_mesh
+
+mesh = make_mesh()  # default: all devices, 1D mesh
+parallel = DataParallel(mesh=mesh, axis_name='d', batch_axis=0)
+
+options = dq.Options(parallel=parallel)
+```
+
+### Parallelizing over multiple batch axes
+
+You can shard over more than one batch axis by providing multiple mesh axes and batch
+axes:
+
+<!-- skip: next -->
+
+```python
+mesh = make_mesh(axis_names=('d0', 'd1'), mesh_shape=(2, 2))
+parallel = DataParallel(mesh=mesh, axis_name=('d0', 'd1'), batch_axis=(0, 1))
+options = dq.Options(parallel=parallel)
+```
+
+!!! Note
+    The sharded batch axes must be divisible by the number of devices along each mesh
+    axis. Any remaining batch axes are replicated (an info message is logged).
+
+### Flat batching restriction with sharding
+
+When `cartesian_batching=False` and `parallel` is enabled, all batched inputs must
+already share the **same batch shape** (or be unbatched). If implicit broadcasting is
+needed (for example `H` has batch shape _(2, 3)_ and `psi0` has batch shape _(3)_),
+Dynamiqs raises an error because the sharded axes become ambiguous.
+
+
 ## Creating batched arguments
 
 ### Single-dimensional batching

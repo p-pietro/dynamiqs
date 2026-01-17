@@ -35,6 +35,7 @@ from .._utils import (
     astimeqarray,
     cartesian_vmap,
     catch_xla_runtime_error,
+    check_parallel_flat_batching,
     multi_vmap,
 )
 from ..core.diffrax_integrator import (
@@ -117,7 +118,7 @@ def mesolve(
             method-dependent, refer to the documentation of the chosen method for more
             details.
         options: Generic options (supported: `save_states`, `cartesian_batching`,
-            `progress_meter`, `t0`, `save_extra`).
+            `progress_meter`, `t0`, `save_extra`, `parallel`).
             ??? "Detailed options API"
 
                 ```
@@ -129,6 +130,7 @@ def mesolve(
                     save_extra: Callable[[Array], PyTree] | None = None,
                     vectorized: bool = False,
                     assume_hermitian: bool = True,
+                    parallel: DataParallel | None = None,
                 )
                 ```
 
@@ -166,6 +168,11 @@ def mesolve(
                     evolution is performed. This option is only compatible with
                     Diffrax-based ODE methods and with `vectorized=False`. In other
                     cases, no assumptions are made on the hermiticity of `rho0`.
+                - **`parallel`** - Data-parallel sharding policy. If provided, batched
+                    qarrays and timeqarrays are sharded along the selected batch axis
+                    while non-batched operators and metadata (like `tsave`) are
+                    replicated. The size of the sharded batch axis should be
+                    divisible by the number of devices.
 
     Returns:
         `dq.MESolveResult` object holding the result of the
@@ -283,14 +290,41 @@ def mesolve(
     tsave = check_times(tsave, 'tsave')
     check_options(options, 'mesolve')
     options = options.initialise()
+    parallel = options.parallel
 
-    # we implement the jitted vectorization in another function to pre-convert QuTiP
-    # objects (which are not JIT-compatible) to qarrays
-    f = _vectorized_mesolve
+    if parallel is not None:
+        if options.cartesian_batching:
+            total_batched_axes = (
+                H.ndim - 2 + sum(L.ndim - 2 for L in Ls) + (rho0.ndim - 2)
+            )
+            parallel.log_under_parallelization(total_batched_axes, context='dq.mesolve')
+        else:
+            shapes = [H.shape[:-2], *[L.shape[:-2] for L in Ls], rho0.shape[:-2]]
+            check_parallel_flat_batching(
+                shapes=shapes, parallel=parallel, context='dq.mesolve'
+            )
+
     if isinstance(method, DiffusiveMonteCarlo) or (
         isinstance(method, JumpMonteCarlo) and isinstance(method.jsse_method, EulerJump)
     ):
         tsave = tuple(tsave.tolist())  # todo: fix static tsave
+        static_tsave = True
+    else:
+        static_tsave = False
+
+    if parallel is not None:
+        H = parallel.put_timeqarray(H)
+        Ls = [parallel.put_timeqarray(L) for L in Ls]
+        rho0 = parallel.put_qarray(rho0)
+        if exp_ops is not None:
+            exp_ops = [parallel.put_qarray(E) for E in exp_ops]
+        if not static_tsave:
+            tsave = parallel.put_array(tsave)
+
+    # we implement the jitted vectorization in another function to pre-convert QuTiP
+    # objects (which are not JIT-compatible) to qarrays
+    f = _vectorized_mesolve
+    if static_tsave:
         f = jax.jit(f, static_argnames=('tsave', 'gradient', 'options'))
     else:
         f = jax.jit(f, static_argnames=('gradient', 'options'))

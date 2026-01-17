@@ -1,4 +1,4 @@
-from . import plot, random
+from . import distributed, plot, random
 from .helpers import *
 from .integrators import *
 from .options import *

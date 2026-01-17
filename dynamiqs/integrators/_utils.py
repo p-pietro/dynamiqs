@@ -5,10 +5,12 @@ from functools import wraps
 from typing import Any
 
 import jax
+import jax.numpy as jnp
 from jax._src.lib import xla_client
 from jaxtyping import PyTree
 
 from .._utils import obj_type_str
+from ..distributed import DataParallel
 from ..method import Method, _DEAdaptiveStep
 from ..qarrays.qarray import QArrayLike
 from ..qarrays.utils import asqarray
@@ -182,3 +184,20 @@ def cartesian_vmap(
                 f = jax.vmap(f, in_axes=in_axes_single, out_axes=out_axes)
 
     return f
+
+
+def check_parallel_flat_batching(
+    *, shapes: Sequence[tuple[int, ...]], parallel: DataParallel, context: str
+) -> tuple[int, ...]:
+    bshape = jnp.broadcast_shapes(*shapes) if shapes else ()
+    unsupported = [shape for shape in shapes if shape not in ((), bshape)]
+    if unsupported:
+        shape_str = ', '.join(str(s) for s in shapes)
+        raise ValueError(
+            'Argument `options.parallel` does not support flat batching with '
+            'broadcasted batch shapes. When `cartesian_batching=False`, all batched '
+            f'inputs must have identical batch shapes (or be unbatched), but got '
+            f'batch shapes {shape_str}.'
+        )
+    parallel.log_under_parallelization(len(bshape), context=context)
+    return bshape

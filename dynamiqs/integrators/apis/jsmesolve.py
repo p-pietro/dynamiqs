@@ -20,6 +20,7 @@ from .._utils import (
     astimeqarray,
     cartesian_vmap,
     catch_xla_runtime_error,
+    check_parallel_flat_batching,
     multi_vmap,
 )
 from ..core.fixed_step_stochastic_integrator import (
@@ -128,7 +129,7 @@ def jsmesolve(
             method-dependent, refer to the documentation of the chosen method for more
             details.
         options: Generic options (supported: `save_states`, `cartesian_batching`,
-            `save_extra`, `nmaxclick`).
+            `save_extra`, `nmaxclick`, `parallel`).
             ??? "Detailed options API"
                 ```
                 dq.Options(
@@ -136,6 +137,7 @@ def jsmesolve(
                     cartesian_batching: bool = True,
                     save_extra: Callable[[Array], PyTree] | None = None,
                     nmaxclick: int = 10_000,
+                    parallel: DataParallel | None = None,
                 )
                 ```
 
@@ -152,6 +154,10 @@ def jsmesolve(
                     during the integration, accessible in `result.extra`.
                 - **`nmaxclick`** - Maximum buffer size for `result.clicktimes`, should
                     be set higher than the expected maximum number of clicks.
+                - **`parallel`** - Data-parallel sharding policy. If provided, batched
+                    qarrays and timeqarrays are sharded along the selected batch axis
+                    while metadata (like `tsave`) is replicated. The size of the
+                    sharded batch axis should be divisible by the number of devices.
 
     Returns:
         `dq.JSMESolveResult` object holding the result of the jump SME integration. Use
@@ -288,6 +294,7 @@ def jsmesolve(
     _check_jsmesolve_args(H, Ls, thetas, etas, rho0, exp_ops)
     check_options(options, 'jsmesolve')
     options = options.initialise()
+    parallel = options.parallel
 
     # todo: fix static tsave
     # this condition allows the user to pass a tuple for tsave to bypass this bit of
@@ -310,6 +317,32 @@ def jsmesolve(
     Lms = [L for L, eta in zip(Ls, etas, strict=True) if eta != 0]
     thetas = thetas[etas != 0]
     etas = etas[etas != 0]
+
+    if parallel is not None:
+        if options.cartesian_batching:
+            total_batched_axes = (
+                H.ndim - 2 + sum(L.ndim - 2 for L in [*Lcs, *Lms]) + (rho0.ndim - 2)
+            )
+            parallel.log_under_parallelization(
+                total_batched_axes, context='dq.jsmesolve'
+            )
+        else:
+            shapes = [
+                H.shape[:-2],
+                *[L.shape[:-2] for L in [*Lcs, *Lms]],
+                rho0.shape[:-2],
+            ]
+            check_parallel_flat_batching(
+                shapes=shapes, parallel=parallel, context='dq.jsmesolve'
+            )
+        H = parallel.put_timeqarray(H)
+        Lcs = [parallel.put_timeqarray(L) for L in Lcs]
+        Lms = [parallel.put_timeqarray(L) for L in Lms]
+        rho0 = parallel.put_qarray(rho0)
+        if exp_ops is not None:
+            exp_ops = [parallel.put_qarray(E) for E in exp_ops]
+        if not isinstance(tsave, tuple):
+            tsave = parallel.put_array(tsave)
 
     # we implement the jitted vectorization in another function to pre-convert QuTiP
     # objects (which are not JIT-compatible) to JAX arrays
