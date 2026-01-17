@@ -24,8 +24,8 @@ def test_dssesolve_parallel_cpu_devices():
                 raise RuntimeError(
                     f"Expected 2 CPU devices, got {jax.device_count()}."
                 )
-            mesh = make_mesh(jax.devices(), axis_name="d")
-            parallel = DataParallel(mesh=mesh, axis_name="d", batch_axis=0)
+            mesh = make_mesh(jax.devices(), axis_names="d")
+            parallel = DataParallel(mesh=mesh, axis_names="d", batch_axis=0)
             options = dq.Options(parallel=parallel)
 
             H = dq.stack([dq.sigmaz(), dq.sigmaz()])

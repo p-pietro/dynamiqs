@@ -125,7 +125,7 @@ import dynamiqs as dq
 from dynamiqs.distributed import DataParallel, make_mesh
 
 mesh = make_mesh()  # default: all devices, 1D mesh
-parallel = DataParallel(mesh=mesh, axis_name='d', batch_axis=0)
+parallel = DataParallel(mesh=mesh, axis_names='d', batch_axis=0)
 
 options = dq.Options(parallel=parallel)
 ```
@@ -139,7 +139,7 @@ axes:
 
 ```python
 mesh = make_mesh(axis_names=('d0', 'd1'), mesh_shape=(2, 2))
-parallel = DataParallel(mesh=mesh, axis_name=('d0', 'd1'), batch_axis=(0, 1))
+parallel = DataParallel(mesh=mesh, axis_names=('d0', 'd1'), batch_axis=(0, 1))
 options = dq.Options(parallel=parallel)
 ```
 

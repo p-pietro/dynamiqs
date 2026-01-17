@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 
 import jax
 import numpy as np
@@ -27,27 +27,23 @@ __all__ = ['make_mesh', 'DataParallel']
 def make_mesh(
     devices: Sequence[jax.Device] | None = None,
     *,
-    axis_name: str | Sequence[str] = 'd',
-    axis_names: Sequence[str] | None = None,
+    axis_names: str | Sequence[str] = 'd',
     mesh_shape: Sequence[int] | None = None,
 ) -> Mesh:
     """Create a device mesh for data-parallel sharding.
 
     Args:
         devices: Devices to include in the mesh. Defaults to `jax.devices()`.
-        axis_name: Mesh axis name used in sharding specs (alias for `axis_names`).
         axis_names: Mesh axis names used in sharding specs.
         mesh_shape: Shape of the mesh. Must match `axis_names` length and device
             count. Defaults to a 1D mesh when a single axis name is provided.
 
     Returns:
-        JAX mesh with a single axis named `axis_name`.
+        JAX mesh with axes named `axis_names`.
     """
     if devices is None:
         devices = jax.devices()
-    if axis_names is None:
-        axis_names = (axis_name,) if isinstance(axis_name, str) else tuple(axis_name)
-    axis_names = tuple(axis_names)
+    axis_names = (axis_names,) if isinstance(axis_names, str) else tuple(axis_names)
 
     if mesh_shape is None:
         if len(axis_names) != 1:
@@ -79,7 +75,7 @@ class DataParallel:
 
     Attributes:
         mesh: Device mesh used for sharding.
-        axis_name: Axis name(s) used in sharding specs.
+        axis_names: Axis name(s) used in sharding specs.
         batch_axis: Axis index(es) representing independent simulations.
 
     Note:
@@ -88,17 +84,14 @@ class DataParallel:
     """
 
     mesh: Mesh
-    axis_name: str | Sequence[str] = 'd'
+    axis_names: str | Sequence[str] = 'd'
     batch_axis: int | Sequence[int] = 0
-
-    _axis_names: tuple[str, ...] = field(init=False, repr=False, default=())
-    _batch_axes: tuple[int, ...] = field(init=False, repr=False, default=())
 
     def __post_init__(self):
         axis_names = (
-            (self.axis_name,)
-            if isinstance(self.axis_name, str)
-            else tuple(self.axis_name)
+            (self.axis_names,)
+            if isinstance(self.axis_names, str)
+            else tuple(self.axis_names)
         )
         batch_axes = (
             (self.batch_axis,)
@@ -107,8 +100,8 @@ class DataParallel:
         )
         if len(axis_names) != len(batch_axes):
             raise ValueError(
-                'Arguments `axis_name(s)` and `batch_axis` must have the same length,'
-                f' but got axis_name(s)={axis_names} and batch_axis={batch_axes}.'
+                'Arguments `axis_names` and `batch_axis` must have the same length, '
+                f'but got axis_names={axis_names} and batch_axis={batch_axes}.'
             )
         if len(set(batch_axes)) != len(batch_axes):
             raise ValueError(
@@ -119,20 +112,18 @@ class DataParallel:
         missing = [name for name in axis_names if name not in mesh_axis_names]
         if missing:
             raise ValueError(
-                'Argument `axis_name(s)` must be present in the mesh axis names, but '
+                'Argument `axis_names` must be present in the mesh axis names, but '
                 f'missing {missing} from mesh.axis_names={mesh_axis_names}.'
             )
 
-        object.__setattr__(self, '_axis_names', axis_names)
-        object.__setattr__(self, '_batch_axes', batch_axes)
-
-    @property
-    def axis_names(self) -> tuple[str, ...]:
-        return self._axis_names
+        object.__setattr__(self, 'axis_names', axis_names)
+        object.__setattr__(self, 'batch_axis', batch_axes)
 
     @property
     def batch_axes(self) -> tuple[int, ...]:
-        return self._batch_axes
+        if isinstance(self.batch_axis, int):
+            return (self.batch_axis,)
+        return tuple(self.batch_axis)
 
     def _replicated(self) -> NamedSharding:
         return NamedSharding(self.mesh, P())

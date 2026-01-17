@@ -28,8 +28,8 @@ def test_sesolve_parallel_cpu_devices():
                 raise RuntimeError(
                     f"Expected 2 CPU devices, got {jax.device_count()}."
                 )
-            mesh = make_mesh(jax.devices(), axis_name="d")
-            parallel = DataParallel(mesh=mesh, axis_name="d", batch_axis=0)
+            mesh = make_mesh(jax.devices(), axis_names="d")
+            parallel = DataParallel(mesh=mesh, axis_names="d", batch_axis=0)
             options = dq.Options(parallel=parallel)
 
             H = dq.stack([dq.sigmaz(), dq.sigmaz()])
@@ -55,7 +55,7 @@ def test_sesolve_parallel_cpu_devices():
 @pytest.mark.run(order=TEST_SHORT)
 def test_sesolve_parallel_flat_batching_unsupported():
     mesh = make_mesh()
-    parallel = DataParallel(mesh=mesh, axis_name='d', batch_axis=0)
+    parallel = DataParallel(mesh=mesh, axis_names='d', batch_axis=0)
     options = dq.Options(cartesian_batching=False, parallel=parallel)
 
     H = dq.sigmaz().broadcast_to(2, 3, 2, 2)
