@@ -18,6 +18,7 @@ __all__ = ['Options']
 class Options(eqx.Module):
     save_states: bool = True
     save_propagators: bool = True
+    offload_states: bool = False
     cartesian_batching: bool = True
     progress_meter: AbstractProgressMeter | bool | None = None
     t0: ScalarLike | None = None
@@ -31,6 +32,7 @@ class Options(eqx.Module):
         self,
         save_states: bool = True,
         save_propagators: bool = True,
+        offload_states: bool = False,
         cartesian_batching: bool = True,
         progress_meter: AbstractProgressMeter | bool | None = None,
         t0: ScalarLike | None = None,
@@ -42,6 +44,7 @@ class Options(eqx.Module):
     ):
         self.save_states = save_states
         self.save_propagators = save_propagators
+        self.offload_states = offload_states
         self.cartesian_batching = cartesian_batching
         self.progress_meter = progress_meter
         self.t0 = t0
@@ -71,6 +74,7 @@ class Options(eqx.Module):
         return Options(
             save_states=self.save_states,
             save_propagators=self.save_propagators,
+            offload_states=self.offload_states,
             cartesian_batching=self.cartesian_batching,
             progress_meter=get_progress_meter(self.progress_meter),
             t0=self.t0,
@@ -86,6 +90,7 @@ def check_options(options: Options, solver_name: str):
     supported_options = {
         'sesolve': (
             'save_states',
+            'offload_states',
             'cartesian_batching',
             'progress_meter',
             't0',
@@ -94,6 +99,7 @@ def check_options(options: Options, solver_name: str):
         ),
         'mesolve': (
             'save_states',
+            'offload_states',
             'cartesian_batching',
             'progress_meter',
             't0',
@@ -119,21 +125,35 @@ def check_options(options: Options, solver_name: str):
         'floquet': ('progress_meter', 't0', 'parallel'),
         'jssesolve': (
             'save_states',
+            'offload_states',
             'cartesian_batching',
             't0',
             'save_extra',
             'nmaxclick',
             'parallel',
         ),
-        'dssesolve': ('save_states', 'cartesian_batching', 'save_extra', 'parallel'),
+        'dssesolve': (
+            'save_states',
+            'offload_states',
+            'cartesian_batching',
+            'save_extra',
+            'parallel',
+        ),
         'jsmesolve': (
             'save_states',
+            'offload_states',
             'cartesian_batching',
             'save_extra',
             'nmaxclick',
             'parallel',
         ),
-        'dsmesolve': ('save_states', 'cartesian_batching', 'save_extra', 'parallel'),
+        'dsmesolve': (
+            'save_states',
+            'offload_states',
+            'cartesian_batching',
+            'save_extra',
+            'parallel',
+        ),
     }
     valid_options = supported_options[solver_name]
 

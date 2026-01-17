@@ -1,17 +1,22 @@
 from __future__ import annotations
 
+import inspect
 from collections.abc import Sequence
-from functools import wraps
+from functools import partial, wraps
 from typing import Any
 
 import jax
 import jax.numpy as jnp
+from jax import ShapeDtypeStruct
 from jax._src.lib import xla_client
+from jax.sharding import SingleDeviceSharding
+from jax.tree_util import GetAttrKey, tree_map_with_path
 from jaxtyping import PyTree
 
 from .._utils import obj_type_str
 from ..distributed import DataParallel
 from ..method import Method, _DEAdaptiveStep
+from ..options import Options
 from ..qarrays.qarray import QArrayLike
 from ..qarrays.utils import asqarray
 from ..time_qarray import (
@@ -201,3 +206,105 @@ def check_parallel_flat_batching(
         )
     parallel.log_under_parallelization(len(bshape), context=context)
     return bshape
+
+
+def _host_offload_supported() -> bool:
+    return jax.default_backend() in ('gpu', 'tpu')
+
+
+def _path_is_ysave(path: tuple[object, ...]) -> bool:
+    if len(path) < 2:
+        return False
+    return (
+        isinstance(path[0], GetAttrKey)
+        and path[0].name == '_saved'
+        and isinstance(path[1], GetAttrKey)
+        and path[1].name == 'ysave'
+    )
+
+
+def _host_sharding_for_state(
+    leaf: ShapeDtypeStruct,
+    *,
+    options: Options,
+    parallel: DataParallel | None,
+) -> object | None:
+    time_axis = 3 if options.save_states else 2
+    batch_ndim = leaf.ndim - time_axis
+    if batch_ndim < 0:
+        return None
+    if parallel is None:
+        sharding = SingleDeviceSharding(jax.devices()[0])
+    else:
+        sharding = parallel._shard_axes(leaf.ndim, batch_ndim=batch_ndim)
+    return sharding.with_memory_kind('pinned_host')
+
+
+def _state_offload_out_shardings(
+    output_shape: PyTree,
+    *,
+    options: Options,
+    parallel: DataParallel | None,
+) -> PyTree:
+    def map_fn(path, leaf):  # noqa: ANN001, ANN202
+        if not _path_is_ysave(path):
+            return None
+        if not isinstance(leaf, ShapeDtypeStruct):
+            return None
+        return _host_sharding_for_state(leaf, options=options, parallel=parallel)
+
+    return tree_map_with_path(map_fn, output_shape)
+
+
+def _eval_shape_with_static_args(
+    f: callable, static_argnames: tuple[str, ...], *args, **kwargs
+) -> PyTree:
+    if not static_argnames:
+        return jax.eval_shape(f, *args, **kwargs)
+
+    sig = inspect.signature(f)
+    bound = sig.bind_partial(*args, **kwargs)
+    bound.apply_defaults()
+
+    static_kwargs = {}
+    for name in static_argnames:
+        if name in bound.arguments:
+            static_kwargs[name] = bound.arguments.pop(name)
+
+    remaining_args = []
+    remaining_kwargs = {}
+    for name, param in sig.parameters.items():
+        if name not in bound.arguments:
+            continue
+        if param.kind in (param.POSITIONAL_ONLY, param.POSITIONAL_OR_KEYWORD):
+            remaining_args.append(bound.arguments[name])
+        else:
+            remaining_kwargs[name] = bound.arguments[name]
+
+    return jax.eval_shape(
+        partial(f, **static_kwargs), *remaining_args, **remaining_kwargs
+    )
+
+
+def jit_with_state_offload(
+    f: callable,
+    *,
+    static_argnames: tuple[str, ...],
+    options: Options,
+    parallel: DataParallel | None,
+    args: tuple[object, ...],
+    kwargs: dict[str, object] | None = None,
+) -> callable:
+    if not options.offload_states or not _host_offload_supported():
+        return jax.jit(f, static_argnames=static_argnames)
+
+    kwargs = {} if kwargs is None else dict(kwargs)
+    output_shape = _eval_shape_with_static_args(
+        f, static_argnames, *args, **kwargs
+    )
+    out_shardings = _state_offload_out_shardings(
+        output_shape, options=options, parallel=parallel
+    )
+    return jax.jit(
+        f, static_argnames=static_argnames, out_shardings=out_shardings
+    )

@@ -19,6 +19,7 @@ from .._utils import (
     cartesian_vmap,
     catch_xla_runtime_error,
     check_parallel_flat_batching,
+    jit_with_state_offload,
     multi_vmap,
 )
 from ..core.event_integrator import jssesolve_event_integrator_constructor
@@ -111,12 +112,13 @@ def jssesolve(
         gradient: Algorithm used to compute the gradient. The default is
             method-dependent, refer to the documentation of the chosen method for more
             details.
-        options: Generic options (supported: `save_states`, `cartesian_batching`, `t0`,
-            `save_extra`, `nmaxclick`, `parallel`).
+        options: Generic options (supported: `save_states`, `offload_states`,
+            `cartesian_batching`, `t0`, `save_extra`, `nmaxclick`, `parallel`).
             ??? "Detailed options API"
                 ```
                 dq.Options(
                     save_states: bool = True,
+                    offload_states: bool = False,
                     cartesian_batching: bool = True,
                     t0: ScalarLike | None = None,
                     save_extra: Callable[[Array], PyTree] | None = None,
@@ -129,6 +131,8 @@ def jssesolve(
 
                 - **`save_states`** - If `True`, the state is saved at every time in
                     `tsave`, otherwise only the final state is returned.
+                - **`offload_states`** - If `True`, saved states are offloaded to host
+                    memory during integration (GPU/TPU only; ignored on CPU).
                 - **`cartesian_batching`** - If `True`, batched arguments are treated as
                     separated batch dimensions, otherwise the batching is performed over
                     a single shared batched dimension.
@@ -315,10 +319,18 @@ def jssesolve(
     # we implement the jitted vectorization in another function to pre-convert QuTiP
     # objects (which are not JIT-compatible) to JAX arrays
     f = _vectorized_jssesolve
-    if isinstance(method, EulerJump):
-        f = jax.jit(f, static_argnames=('tsave', 'gradient', 'options'))
-    else:
-        f = jax.jit(f, static_argnames=('gradient', 'options'))
+    static_argnames = (
+        ('tsave', 'gradient', 'options')
+        if isinstance(method, EulerJump)
+        else ('gradient', 'options')
+    )
+    f = jit_with_state_offload(
+        f,
+        static_argnames=static_argnames,
+        options=options,
+        parallel=parallel,
+        args=(H, Ls, psi0, tsave, keys, exp_ops, method, gradient, options),
+    )
     return f(H, Ls, psi0, tsave, keys, exp_ops, method, gradient, options)
 
 

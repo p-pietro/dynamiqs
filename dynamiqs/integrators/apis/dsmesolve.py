@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from functools import partial
-
 import jax
 import jax.numpy as jnp
 from jax import Array
@@ -21,6 +19,7 @@ from .._utils import (
     cartesian_vmap,
     catch_xla_runtime_error,
     check_parallel_flat_batching,
+    jit_with_state_offload,
     multi_vmap,
 )
 from ..core.fixed_step_stochastic_integrator import (
@@ -133,12 +132,13 @@ def dsmesolve(
         gradient: Algorithm used to compute the gradient. The default is
             method-dependent, refer to the documentation of the chosen method for more
             details.
-        options: Generic options (supported: `save_states`, `cartesian_batching`,
-            `save_extra`, `parallel`).
+        options: Generic options (supported: `save_states`, `offload_states`,
+            `cartesian_batching`, `save_extra`, `parallel`).
             ??? "Detailed options API"
                 ```
                 dq.Options(
                     save_states: bool = True,
+                    offload_states: bool = False,
                     cartesian_batching: bool = True,
                     save_extra: Callable[[Array], PyTree] | None = None,
                     parallel: DataParallel | None = None,
@@ -149,6 +149,8 @@ def dsmesolve(
 
                 - **`save_states`** - If `True`, the state is saved at every time in
                     `tsave`, otherwise only the final state is returned.
+                - **`offload_states`** - If `True`, saved states are offloaded to host
+                    memory during integration (GPU/TPU only; ignored on CPU).
                 - **`cartesian_batching`** - If `True`, batched arguments are treated as
                     separated batch dimensions, otherwise the batching is performed over
                     a single shared batched dimension.
@@ -345,13 +347,17 @@ def dsmesolve(
 
     # we implement the jitted vectorization in another function to pre-convert QuTiP
     # objects (which are not JIT-compatible) to JAX arrays
-    return _vectorized_dsmesolve(
-        H, Lcs, Lms, etas, rho0, tsave, keys, exp_ops, method, gradient, options
+    f = jit_with_state_offload(
+        _vectorized_dsmesolve,
+        static_argnames=('tsave', 'gradient', 'options'),
+        options=options,
+        parallel=parallel,
+        args=(H, Lcs, Lms, etas, rho0, tsave, keys, exp_ops, method, gradient, options),
     )
+    return f(H, Lcs, Lms, etas, rho0, tsave, keys, exp_ops, method, gradient, options)
 
 
 @catch_xla_runtime_error
-@partial(jax.jit, static_argnames=('tsave', 'gradient', 'options'))
 def _vectorized_dsmesolve(
     H: TimeQArray,
     Lcs: list[TimeQArray],
