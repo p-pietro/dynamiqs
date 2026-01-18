@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import inspect
 from collections.abc import Sequence
+from dataclasses import replace
 from functools import partial, wraps
 from typing import Any
 
@@ -17,8 +18,10 @@ from .._utils import obj_type_str
 from ..distributed import DataParallel
 from ..method import Method, _DEAdaptiveStep
 from ..options import Options
+from ..qarrays.dense_qarray import DenseQArray
 from ..qarrays.qarray import QArrayLike
 from ..qarrays.utils import asqarray
+from ..qarrays.sparsedia_qarray import SparseDIAQArray
 from ..time_qarray import (
     ConstantTimeQArray,
     PWCTimeQArray,
@@ -233,11 +236,9 @@ def _host_sharding_for_state(
     batch_ndim = leaf.ndim - time_axis
     if batch_ndim < 0:
         return None
-    if parallel is None:
-        sharding = SingleDeviceSharding(jax.devices()[0])
-    else:
-        sharding = parallel._shard_axes(leaf.ndim, batch_ndim=batch_ndim)
-    return sharding.with_memory_kind('pinned_host')
+    return _host_sharding_for_array(
+        leaf.ndim, batch_ndim=batch_ndim, parallel=parallel
+    )
 
 
 def _state_offload_out_shardings(
@@ -254,6 +255,37 @@ def _state_offload_out_shardings(
         return _host_sharding_for_state(leaf, options=options, parallel=parallel)
 
     return tree_map_with_path(map_fn, output_shape)
+
+
+def _host_sharding_for_array(
+    ndim: int, *, batch_ndim: int, parallel: DataParallel | None
+) -> object:
+    if parallel is None:
+        sharding = SingleDeviceSharding(jax.devices()[0])
+    else:
+        sharding = parallel._shard_axes(ndim, batch_ndim=batch_ndim)
+    return sharding.with_memory_kind('pinned_host')
+
+
+def offload_state_snapshot(state: object, *, options: Options) -> object:
+    if not options.offload_states or not _host_offload_supported():
+        return state
+    if not isinstance(state, DenseQArray | SparseDIAQArray):
+        return state
+
+    batch_ndim = state.ndim - 2
+    if batch_ndim < 0:
+        return state
+
+    sharding = _host_sharding_for_array(
+        state.ndim, batch_ndim=batch_ndim, parallel=options.parallel
+    )
+    if isinstance(state, DenseQArray):
+        data = jax.lax.with_sharding_constraint(state.data, sharding)
+        return replace(state, data=data)
+
+    diags = jax.lax.with_sharding_constraint(state.diags, sharding)
+    return replace(state, diags=diags)
 
 
 def _eval_shape_with_static_args(

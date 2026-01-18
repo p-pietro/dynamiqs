@@ -8,6 +8,7 @@ from jaxtyping import PyTree
 
 from ...result import PropagatorSaved, Saved, SolveSaved
 from ...utils.general import expect
+from .._utils import offload_state_snapshot
 from .interfaces import OptionsInterface
 
 
@@ -46,6 +47,8 @@ class SolveSaveMixin(AbstractSaveMixin):
 
     def save(self, y: PyTree) -> Saved:
         ysave = y if self.options.save_states else None
+        if ysave is not None:
+            ysave = offload_state_snapshot(ysave, options=self.options)
         extra = self.options.save_extra(y) if self.options.save_extra else None
         if self.Es is not None:
             Esave = jnp.stack([expect(E, y) for E in self.Es])
