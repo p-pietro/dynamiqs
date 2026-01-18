@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 
 import equinox as eqx
 import jax.tree_util as jtu
@@ -11,13 +12,41 @@ from .progress_meter import AbstractProgressMeter
 from .qarrays.qarray import QArray
 from .utils.global_settings import get_progress_meter
 
-__all__ = ['Options']
+__all__ = ['DeviceBatching', 'Options']
+
+
+@dataclass(frozen=True)
+class DeviceBatching:
+    """Configuration for distributing batch axes over multiple devices.
+
+    Args:
+        mesh_shape: Shape of the device mesh. If `None`, all available devices are
+            used in a 1D mesh.
+        batch_axes: Indices of the global batch axes to shard, ordered to match the
+            mesh axes. If `None`, the leading batch axes are used.
+    """
+
+    mesh_shape: tuple[int, ...] | int | None = None
+    batch_axes: tuple[int, ...] | int | None = None
+
+    def __post_init__(self):
+        mesh_shape = self.mesh_shape
+        if isinstance(mesh_shape, int):
+            mesh_shape = (mesh_shape,)
+        batch_axes = self.batch_axes
+        if isinstance(batch_axes, int):
+            batch_axes = (batch_axes,)
+        object.__setattr__(self, 'mesh_shape', mesh_shape)
+        object.__setattr__(self, 'batch_axes', batch_axes)
 
 
 class Options(eqx.Module):
     save_states: bool = True
     save_propagators: bool = True
     cartesian_batching: bool = True
+    device_batching: DeviceBatching | bool | int | tuple[int, ...] | None = eqx.field(
+        static=True, default=None
+    )
     progress_meter: AbstractProgressMeter | bool | None = None
     t0: ScalarLike | None = None
     save_extra: Callable[[QArray], PyTree] | None = None
@@ -30,6 +59,7 @@ class Options(eqx.Module):
         save_states: bool = True,
         save_propagators: bool = True,
         cartesian_batching: bool = True,
+        device_batching: DeviceBatching | bool | int | tuple[int, ...] | None = None,
         progress_meter: AbstractProgressMeter | bool | None = None,
         t0: ScalarLike | None = None,
         save_extra: Callable[[QArray], PyTree] | None = None,
@@ -40,6 +70,7 @@ class Options(eqx.Module):
         self.save_states = save_states
         self.save_propagators = save_propagators
         self.cartesian_batching = cartesian_batching
+        self.device_batching = device_batching
         self.progress_meter = progress_meter
         self.t0 = t0
         self.nmaxclick = nmaxclick
@@ -68,6 +99,7 @@ class Options(eqx.Module):
             save_states=self.save_states,
             save_propagators=self.save_propagators,
             cartesian_batching=self.cartesian_batching,
+            device_batching=self.device_batching,
             progress_meter=get_progress_meter(self.progress_meter),
             t0=self.t0,
             save_extra=self.save_extra,
@@ -82,6 +114,7 @@ def check_options(options: Options, solver_name: str):
         'sesolve': (
             'save_states',
             'cartesian_batching',
+            'device_batching',
             'progress_meter',
             't0',
             'save_extra',
@@ -89,25 +122,55 @@ def check_options(options: Options, solver_name: str):
         'mesolve': (
             'save_states',
             'cartesian_batching',
+            'device_batching',
             'progress_meter',
             't0',
             'save_extra',
             'vectorized',
             'assume_hermitian',
         ),
-        'sepropagator': ('save_propagators', 'progress_meter', 't0', 'save_extra'),
-        'mepropagator': ('save_propagators', 'cartesian_batching', 't0', 'save_extra'),
-        'floquet': ('progress_meter', 't0'),
+        'sepropagator': (
+            'save_propagators',
+            'device_batching',
+            'progress_meter',
+            't0',
+            'save_extra',
+        ),
+        'mepropagator': (
+            'save_propagators',
+            'cartesian_batching',
+            'device_batching',
+            't0',
+            'save_extra',
+        ),
+        'floquet': ('device_batching', 'progress_meter', 't0'),
         'jssesolve': (
             'save_states',
             'cartesian_batching',
+            'device_batching',
             't0',
             'save_extra',
             'nmaxclick',
         ),
-        'dssesolve': ('save_states', 'cartesian_batching', 'save_extra'),
-        'jsmesolve': ('save_states', 'cartesian_batching', 'save_extra', 'nmaxclick'),
-        'dsmesolve': ('save_states', 'cartesian_batching', 'save_extra'),
+        'dssesolve': (
+            'save_states',
+            'cartesian_batching',
+            'device_batching',
+            'save_extra',
+        ),
+        'jsmesolve': (
+            'save_states',
+            'cartesian_batching',
+            'device_batching',
+            'save_extra',
+            'nmaxclick',
+        ),
+        'dsmesolve': (
+            'save_states',
+            'cartesian_batching',
+            'device_batching',
+            'save_extra',
+        ),
     }
     valid_options = supported_options[solver_name]
 

@@ -16,6 +16,10 @@ from ...qarrays.utils import asqarray
 from ...result import DSMESolveResult, JSMESolveResult
 from ...time_qarray import TimeQArray
 from .._utils import (
+    _assign_batch_axes,
+    _fill_batch_axes_like,
+    _flatten_batch_shape,
+    apply_device_batching,
     assert_method_supported,
     astimeqarray,
     cartesian_vmap,
@@ -128,12 +132,14 @@ def jsmesolve(
             method-dependent, refer to the documentation of the chosen method for more
             details.
         options: Generic options (supported: `save_states`, `cartesian_batching`,
-            `save_extra`, `nmaxclick`).
+            `device_batching`, `save_extra`, `nmaxclick`).
             ??? "Detailed options API"
                 ```
                 dq.Options(
                     save_states: bool = True,
                     cartesian_batching: bool = True,
+                    device_batching: DeviceBatching | bool | int
+                        | tuple[int, ...] | None = None,
                     save_extra: Callable[[Array], PyTree] | None = None,
                     nmaxclick: int = 10_000,
                 )
@@ -146,6 +152,11 @@ def jsmesolve(
                 - **`cartesian_batching`** - If `True`, batched arguments are treated as
                     separated batch dimensions, otherwise the batching is performed over
                     a single shared batched dimension.
+                - **`device_batching`** - Optional configuration to shard batch axes
+                    over multiple devices using `jax.shard_map`. Use
+                    `dq.DeviceBatching(...)` to select the mesh shape and which batch
+                    axes to shard, or pass `True` to use all devices over the leading
+                    batch axes.
                 - **`save_extra`** _(function, optional)_ - A function with signature
                     `f(QArray) -> PyTree` that takes a state as input and returns a
                     PyTree. This can be used to save additional arbitrary data
@@ -340,7 +351,12 @@ def _vectorized_jsmesolve(
 
     if options.cartesian_batching:
         nvmap = (H.ndim - 2, 0, 0, 0, 0, rho0.ndim - 2, 0, 0, 0, 0, 0, 0)
+        cartesian_batch_axes, _ = _assign_batch_axes(nvmap)
+        batch_shape = _flatten_batch_shape(
+            (H.shape[:-2], (), (), (), (), rho0.shape[:-2], (), (), (), (), (), ())
+        )
         f = cartesian_vmap(_jsmesolve_many_trajectories, in_axes, out_axes, nvmap)
+        batch_axes = cartesian_batch_axes
     else:
         bshape = jnp.broadcast_shapes(H.shape[:-2], rho0.shape[:-2])
         nvmap = len(bshape)
@@ -350,9 +366,30 @@ def _vectorized_jsmesolve(
         rho0 = rho0.broadcast_to(*bshape, n, n)
         # vectorize the function
         f = multi_vmap(_jsmesolve_many_trajectories, in_axes, out_axes, nvmap)
+        batch_axes = _fill_batch_axes_like(in_axes, tuple(range(nvmap)))
+        batch_shape = tuple(bshape)
 
-    return f(
-        H, Lcs, Lms, thetas, etas, rho0, tsave, keys, exp_ops, method, gradient, options
+    return apply_device_batching(
+        f,
+        (
+            H,
+            Lcs,
+            Lms,
+            thetas,
+            etas,
+            rho0,
+            tsave,
+            keys,
+            exp_ops,
+            method,
+            gradient,
+            options,
+        ),
+        in_axes,
+        out_axes,
+        batch_axes,
+        batch_shape,
+        options.device_batching,
     )
 
 

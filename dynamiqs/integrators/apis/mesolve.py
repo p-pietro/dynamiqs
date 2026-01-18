@@ -31,6 +31,10 @@ from ...qarrays.utils import asqarray
 from ...result import MESolveResult
 from ...time_qarray import TimeQArray
 from .._utils import (
+    _assign_batch_axes,
+    _fill_batch_axes_like,
+    _flatten_batch_shape,
+    apply_device_batching,
     assert_method_supported,
     astimeqarray,
     cartesian_vmap,
@@ -117,13 +121,16 @@ def mesolve(
             method-dependent, refer to the documentation of the chosen method for more
             details.
         options: Generic options (supported: `save_states`, `cartesian_batching`,
-            `progress_meter`, `t0`, `save_extra`).
+            `device_batching`, `progress_meter`, `t0`, `save_extra`, `vectorized`,
+            `assume_hermitian`).
             ??? "Detailed options API"
 
                 ```
                 dq.Options(
                     save_states: bool = True,
                     cartesian_batching: bool = True,
+                    device_batching: DeviceBatching | bool | int
+                        | tuple[int, ...] | None = None,
                     progress_meter: AbstractProgressMeter | bool | None = None,
                     t0: ScalarLike | None = None,
                     save_extra: Callable[[Array], PyTree] | None = None,
@@ -139,6 +146,11 @@ def mesolve(
                 - **`cartesian_batching`** - If `True`, batched arguments are treated as
                     separated batch dimensions, otherwise the batching is performed over
                     a single shared batched dimension.
+                - **`device_batching`** - Optional configuration to shard batch axes
+                    over multiple devices using `jax.shard_map`. Use
+                    `dq.DeviceBatching(...)` to select the mesh shape and which batch
+                    axes to shard, or pass `True` to use all devices over the leading
+                    batch axes.
                 - **`progress_meter`** - Progress meter indicating how far the solve has
                     progressed. Defaults to `None` which uses the global default
                     progress meter (see
@@ -315,7 +327,21 @@ def _vectorized_mesolve(
 
     if options.cartesian_batching:
         nvmap = (H.ndim - 2, [L.ndim - 2 for L in Ls], rho0.ndim - 2, 0, 0, 0, 0, 0)
+        cartesian_batch_axes, _ = _assign_batch_axes(nvmap)
+        batch_shape = _flatten_batch_shape(
+            (
+                H.shape[:-2],
+                [L.shape[:-2] for L in Ls],
+                rho0.shape[:-2],
+                (),
+                (),
+                (),
+                (),
+                (),
+            )
+        )
         f = cartesian_vmap(_mesolve, in_axes, out_axes, nvmap)
+        batch_axes = cartesian_batch_axes
     else:
         bshape = jnp.broadcast_shapes(*[x.shape[:-2] for x in [H, *Ls, rho0]])
         nvmap = len(bshape)
@@ -326,8 +352,18 @@ def _vectorized_mesolve(
         rho0 = rho0.broadcast_to(*bshape, *rho0.shape[-2:])
         # vectorize the function
         f = multi_vmap(_mesolve, in_axes, out_axes, nvmap)
+        batch_axes = _fill_batch_axes_like(in_axes, tuple(range(nvmap)))
+        batch_shape = tuple(bshape)
 
-    return f(H, Ls, rho0, tsave, exp_ops, method, gradient, options)
+    return apply_device_batching(
+        f,
+        (H, Ls, rho0, tsave, exp_ops, method, gradient, options),
+        in_axes,
+        out_axes,
+        batch_axes,
+        batch_shape,
+        options.device_batching,
+    )
 
 
 def _mesolve(

@@ -15,6 +15,9 @@ from ...qarrays.qarray import QArrayLike
 from ...result import FloquetResult
 from ...time_qarray import TimeQArray
 from .._utils import (
+    _assign_batch_axes,
+    _flatten_batch_shape,
+    apply_device_batching,
     assert_method_supported,
     astimeqarray,
     cartesian_vmap,
@@ -68,10 +71,13 @@ def floquet(
             [`Kvaerno5`][dynamiqs.method.Kvaerno5],
             [`Euler`][dynamiqs.method.Euler]).
         gradient: Algorithm used to compute the gradient.
-        options: Generic options (supported: `progress_meter`, `t0`).
+        options: Generic options (supported: `device_batching`, `progress_meter`,
+            `t0`).
             ??? "Detailed options API"
                 ```
                 dq.Options(
+                    device_batching: DeviceBatching | bool | int
+                        | tuple[int, ...] | None = None,
                     progress_meter: AbstractProgressMeter | bool | None = None,
                     t0: ScalarLike | None = None,
                 )
@@ -88,6 +94,11 @@ def floquet(
                     [dynamiqs/progress_meter.py](https://github.com/dynamiqs/dynamiqs/blob/main/dynamiqs/progress_meter.py).
                     If gradients are computed, the progress meter only displays during
                     the forward pass.
+                - **`device_batching`** - Optional configuration to shard batch axes
+                    over multiple devices using `jax.shard_map`. Use
+                    `dq.DeviceBatching(...)` to select the mesh shape and which batch
+                    axes to shard, or pass `True` to use all devices over the leading
+                    batch axes.
                 - **`t0`** - Initial time. If `None`, defaults to the first time in
                     `tsave`.
 
@@ -210,10 +221,21 @@ def _vectorized_floquet(
     out_axes = FloquetResult.out_axes()
 
     # cartesian batching only
-    nvmap = (H.ndim - 2, 0, 0, 0, 0, 0, 0)
+    nvmap = (H.ndim - 2, 0, 0, 0, 0, 0)
+    cartesian_batch_axes, _ = _assign_batch_axes(nvmap)
+    batch_shape = _flatten_batch_shape((H.shape[:-2], (), (), (), (), ()))
     f = cartesian_vmap(_floquet, in_axes, out_axes, nvmap)
+    batch_axes = cartesian_batch_axes
 
-    return f(H, T, tsave, method, gradient, options)
+    return apply_device_batching(
+        f,
+        (H, T, tsave, method, gradient, options),
+        in_axes,
+        out_axes,
+        batch_axes,
+        batch_shape,
+        options.device_batching,
+    )
 
 
 def _floquet(

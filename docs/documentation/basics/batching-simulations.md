@@ -114,6 +114,49 @@ The simulation runs for each set of Hamiltonians, jump operators and initial sta
 
     For example for `dq.sesolve()` with `H` of shape _(2, 3, n, n)_, `psi0` can be of shape: _(n, 1)_, _(3, n, 1)_, _(2, 1, n, 1)_, _(2, 3, n, 1)_, _(..., 2, 3, n, 1)_, etc. By playing with the arguments shape, you have complete freedom over the simulation you want to run.
 
+## Device batching (multi-device)
+
+When multiple devices are available (for example multiple GPUs or CPU devices), you can
+distribute batch axes across them using `jax.shard_map` via the
+`device_batching` option. This keeps the batching semantics unchanged while splitting
+the work over devices.
+
+```python
+options = dq.Options(
+    device_batching=dq.DeviceBatching(
+        mesh_shape=(2,),   # use 2 devices
+        batch_axes=(0,),   # shard the first batch axis
+    ),
+)
+result = dq.sesolve(H, psi0, tsave, options=options)
+```
+
+The `batch_axes` indices refer to the **global batch axes**:
+
+- In **cartesian batching**, the global batch axes are the concatenation of each
+  batched argument axes in order (e.g. `...H, ...psi0` for `dq.sesolve`).
+- In **flat batching**, the global batch axes are the broadcasted axes of all batched
+  arguments.
+
+Device batching works with both cartesian and flat batching, including diffrax-based
+solvers.
+
+You can shard over multiple batch axes by matching the mesh axes and `batch_axes`
+lengths. For example, with a 2D mesh you can shard over two distinct batch axes:
+
+```python
+options = dq.Options(
+    device_batching=dq.DeviceBatching(
+        mesh_shape=(2, 2),  # 2x2 device mesh
+        batch_axes=(0, 2),  # shard batch axes 0 and 2
+    ),
+)
+```
+
+Each sharded batch axis size must be divisible by the corresponding mesh axis size. If
+you prefer a quick default, you can pass `device_batching=True` to shard over the
+leading batch axes using all available devices.
+
 
 ## Creating batched arguments
 
