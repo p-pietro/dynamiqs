@@ -526,30 +526,56 @@ def _run_sharded(
     batch_axes: Any,
     mesh: Mesh,
     global_axis_names: list[str | None],
+    static_fields: dict[str, Any] | None = None,
 ) -> Any:
     """Execute function with shard_map."""
     in_specs = _build_in_specs(args, in_axes, batch_axes, global_axis_names)
     if not any(leaf is not None for leaf in jax.tree_util.tree_leaves(in_specs)):
         return f(*args)
 
-    def is_array_or_shape(x: Any) -> bool:
-        return eqx.is_array(x) or isinstance(x, jax.ShapeDtypeStruct)
-
-    out_tree = eqx.filter_eval_shape(f, *args)
-    out_dynamic = eqx.filter(out_tree, is_array_or_shape)
-    out_static = eqx.filter(out_tree, lambda x: not is_array_or_shape(x))
-    out_specs = _build_out_specs(out_dynamic, out_axes, global_axis_names)
-
-    def f_dynamic(*args: Any) -> Any:
-        result = f(*args)
-        return eqx.filter(result, eqx.is_array)
+    out_specs = _build_out_specs_from_axes(out_axes, global_axis_names)
 
     shard_map = _get_shard_map()
     sharded_f = shard_map(
-        f_dynamic, mesh=mesh, in_specs=in_specs, out_specs=out_specs, check_vma=False
+        f, mesh=mesh, in_specs=in_specs, out_specs=out_specs, check_vma=False
     )
-    sharded_dynamic = sharded_f(*args)
-    return eqx.combine(sharded_dynamic, out_static)
+    result = sharded_f(*args)
+    if static_fields:
+        result = _restore_static_fields(result, static_fields)
+    return result
+
+
+def _restore_static_fields(result: Any, static_fields: dict[str, Any]) -> Any:
+    for name, value in static_fields.items():
+        if hasattr(result, name):
+            result = eqx.tree_at(
+                lambda x, name=name: getattr(x, name),
+                result,
+                value,
+                is_leaf=lambda x: x is None,
+            )
+    return result
+
+
+def _build_out_specs_from_axes(
+    out_axes: Any, global_axis_names: list[str | None]
+) -> Any:
+    axis_names = tuple(global_axis_names)
+    spec_batched = P(*axis_names)
+
+    def map_axis(axis: Any) -> P:
+        if axis is None:
+            return P()
+        if isinstance(axis, int):
+            return spec_batched
+        raise TypeError(
+            'Output axes must be integers or None, but found '
+            f'{obj_type_str(axis)}.'
+        )
+
+    return jax.tree_util.tree_map(
+        map_axis, out_axes, is_leaf=lambda x: isinstance(x, int) or x is None
+    )
 
 
 def apply_device_batching(
@@ -560,6 +586,7 @@ def apply_device_batching(
     batch_axes: Any,
     batch_shape: tuple[int, ...],
     device_batching: DeviceBatching | bool | int | tuple[int, ...] | None,
+    static_fields: dict[str, Any] | None = None,
 ) -> Any:
     config = _normalize_device_batching(device_batching, len(batch_shape))
     if config is None:
@@ -574,4 +601,13 @@ def apply_device_batching(
 
     mesh = _cached_mesh(mesh_shape, axis_names)
 
-    return _run_sharded(f, args, in_axes, out_axes, batch_axes, mesh, global_axis_names)
+    return _run_sharded(
+        f,
+        args,
+        in_axes,
+        out_axes,
+        batch_axes,
+        mesh,
+        global_axis_names,
+        static_fields=static_fields,
+    )

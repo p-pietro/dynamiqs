@@ -367,6 +367,7 @@ def _vectorized_dsmesolve(
         batch_axes = _fill_batch_axes_like(in_axes, tuple(range(nvmap)))
         batch_shape = tuple(bshape)
 
+    static_fields = {'method': method, 'gradient': gradient, 'options': options}
     return apply_device_batching(
         f,
         (H, Lcs, Lms, etas, rho0, tsave, keys, exp_ops, method, gradient, options),
@@ -375,6 +376,7 @@ def _vectorized_dsmesolve(
         batch_axes,
         batch_shape,
         options.device_batching,
+        static_fields=static_fields,
     )
 
 

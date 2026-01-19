@@ -227,6 +227,12 @@ def _vectorized_floquet(
     f = cartesian_vmap(_floquet, in_axes, out_axes, nvmap)
     batch_axes = cartesian_batch_axes
 
+    static_fields = {
+        'method': method,
+        'gradient': gradient,
+        'options': options,
+        'T': T,
+    }
     return apply_device_batching(
         f,
         (H, T, tsave, method, gradient, options),
@@ -235,6 +241,7 @@ def _vectorized_floquet(
         batch_axes,
         batch_shape,
         options.device_batching,
+        static_fields=static_fields,
     )
 
 

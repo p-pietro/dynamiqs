@@ -223,6 +223,7 @@ def _vectorized_sepropagator(
     f = cartesian_vmap(_sepropagator, in_axes, out_axes, nvmap)
     batch_axes = cartesian_batch_axes
 
+    static_fields = {'method': method, 'gradient': gradient, 'options': options}
     return apply_device_batching(
         f,
         (H, tsave, method, gradient, options),
@@ -231,6 +232,7 @@ def _vectorized_sepropagator(
         batch_axes,
         batch_shape,
         options.device_batching,
+        static_fields=static_fields,
     )
 
 
