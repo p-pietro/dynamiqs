@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
-from functools import wraps
+from functools import lru_cache, wraps
 from typing import Any
 
 import equinox as eqx
@@ -448,7 +448,40 @@ def _normalize_device_batching(
         mesh_shape = (jax.device_count(),)
 
     batch_axes = _validate_mesh_shape(mesh_shape, batch_axes, total_batch_ndim)
+    mesh_shape, batch_axes = _prune_mesh_axes(mesh_shape, batch_axes)
+    if len(mesh_shape) == 0:
+        return None
     return mesh_shape, batch_axes
+
+
+def _prune_mesh_axes(
+    mesh_shape: tuple[int, ...], batch_axes: tuple[int, ...]
+) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """Drop mesh axes with size 1 (no-op sharding) to reduce sharding overhead."""
+    keep = tuple(i for i, size in enumerate(mesh_shape) if size > 1)
+    if len(keep) == len(mesh_shape):
+        return mesh_shape, batch_axes
+    if not keep:
+        return (), ()
+    return tuple(mesh_shape[i] for i in keep), tuple(batch_axes[i] for i in keep)
+
+
+@lru_cache(maxsize=16)
+def _cached_mesh(mesh_shape: tuple[int, ...], axis_names: tuple[str, ...]) -> Mesh:
+    mesh_size = math.prod(mesh_shape)
+    devices = _cached_devices()
+    if mesh_size > len(devices):
+        raise ValueError(
+            'Argument `device_batching` requests a mesh of size'
+            f' {mesh_size}, but only {len(devices)} devices are available.'
+        )
+    mesh_devices = np.array(devices[:mesh_size]).reshape(mesh_shape)
+    return Mesh(mesh_devices, axis_names)
+
+
+@lru_cache(maxsize=1)
+def _cached_devices() -> tuple[jax.Device, ...]:
+    return tuple(jax.devices())
 
 
 def _build_global_axis_names(
@@ -533,21 +566,12 @@ def apply_device_batching(
         return f(*args)
 
     mesh_shape, batch_axes_selection = config
-    mesh_size = math.prod(mesh_shape)
-    devices = jax.devices()
-    if mesh_size > len(devices):
-        raise ValueError(
-            'Argument `device_batching` requests a mesh of size'
-            f' {mesh_size}, but only {len(devices)} devices are available.'
-        )
-
     global_axis_names, axis_names = _build_global_axis_names(
         batch_shape, mesh_shape, batch_axes_selection
     )
     if not any(name is not None for name in global_axis_names):
         return f(*args)
 
-    mesh_devices = np.array(devices[:mesh_size]).reshape(mesh_shape)
-    mesh = Mesh(mesh_devices, axis_names)
+    mesh = _cached_mesh(mesh_shape, axis_names)
 
     return _run_sharded(f, args, in_axes, out_axes, batch_axes, mesh, global_axis_names)
