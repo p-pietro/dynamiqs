@@ -230,6 +230,15 @@ class MESolveLowRankIntegrator(
                 f'but got rank={self.method.rank} and n={n}.'
             )
 
+        # check that `save_extra` is not set on both `Options` and `LowRank`
+        if self.method.save_extra is not None and self.options.save_extra is not None:
+            raise ValueError(
+                'Cannot set both `dq.Options(save_extra=...)` and '
+                '`dq.method.LowRank(save_extra=...)` at the same time. The former '
+                'receives the full-rank density matrix `rho(t)`, the latter '
+                'receives the low-rank factor `m(t)` directly.'
+            )
+
         # warn if using Cholesky solver with single precision
         if self.method.linear_solver is LinearSolver.CHOLESKY and not jax.config.read(
             'jax_enable_x64'
@@ -307,7 +316,9 @@ class MESolveLowRankIntegrator(
             msave = asqarray(m, dims=self.dims)
 
         extra = None
-        if self.options.save_extra:
+        if self.method.save_extra is not None:
+            extra = self.method.save_extra(m)
+        elif self.options.save_extra:
             rho = asqarray(rho_from_m(m), dims=self.dims)
             extra = self.options.save_extra(rho)
 

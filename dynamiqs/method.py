@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from enum import Enum
 from typing import ClassVar
 
 import equinox as eqx
 import jax.numpy as jnp
-from jaxtyping import PRNGKeyArray
+import jax.tree_util as jtu
+from jax import Array
+from jaxtyping import PRNGKeyArray, PyTree
 from optimistix import AbstractRootFinder
 
 from ._utils import tree_str_inline
@@ -769,6 +772,14 @@ class LowRank(Method):
             norm `perturbation_scale` to avoid $m^\dag m$ being singular. Defaults
             to `1e-5`.
         key: PRNG key used for random initialization of the low-rank factors.
+        save_extra (function, optional): Function computing extra data from the
+            low-rank factor `m(t)` at every saved time step, returning a `PyTree`
+            of arbitrary shape. Unlike `dq.Options(save_extra=...)`, which
+            receives the full-rank density matrix `rho(t)` reconstructed from
+            `m(t)`, this function receives `m(t)` directly and so avoids
+            reconstructing the full-rank density matrix. Setting both
+            `LowRank.save_extra` and `dq.Options(save_extra=...)` at the same
+            time raises an error.
 
     Note:
         The low-rank factors can be accessed from
@@ -805,6 +816,7 @@ class LowRank(Method):
     key: PRNGKeyArray
     linear_solver: LinearSolver = eqx.field(static=True, default=LinearSolver.QR)
     perturbation_scale: float = eqx.field(static=True, default=1e-5)
+    save_extra: Callable[[Array], PyTree] | None = None
 
     SUPPORTED_GRADIENT: ClassVar[_TupleGradient] = _DIFFRAX_ODE_GRADIENTS
 
@@ -817,6 +829,7 @@ class LowRank(Method):
         perturbation_scale: float = 1e-5,
         *,
         key: PRNGKeyArray,
+        save_extra: Callable[[Array], PyTree] | None = None,
     ):
         self.ode_method = ode_method
 
@@ -848,3 +861,6 @@ class LowRank(Method):
         self.perturbation_scale = perturbation_scale
 
         self.key = jnp.asarray(key)
+
+        # make `save_extra` a Pytree using `Partial`
+        self.save_extra = jtu.Partial(save_extra) if save_extra is not None else None

@@ -58,3 +58,26 @@ class TestMESolveAdaptiveLowRank(IntegratorTester):
         m = result.lowrank_states.to_jax()
         rho = m @ m.conj().swapaxes(-2, -1)
         assert jnp.allclose(result.states.to_jax(), rho)
+
+    @pytest.mark.parametrize('system', [dense_ocavity])
+    def test_save_extra_receives_factor(self, system):
+        rank = system.n // 2
+        method = LowRank(
+            rank=rank,
+            ode_method=Tsit5(),
+            key=jax.random.PRNGKey(0),
+            save_extra=lambda m: m,
+        )
+        result = system.run(method)
+        assert result.extra.shape[-2:] == (system.n, rank)
+
+    @pytest.mark.parametrize('system', [dense_ocavity])
+    def test_save_extra_conflict_raises(self, system):
+        method = LowRank(
+            rank=system.n // 2,
+            ode_method=Tsit5(),
+            key=jax.random.PRNGKey(0),
+            save_extra=lambda m: m,
+        )
+        with pytest.raises(ValueError, match='Cannot set both'):
+            system.run(method, save_extra=lambda rho: rho)
